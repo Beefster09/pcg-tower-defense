@@ -302,6 +302,11 @@ class Game {
       this.invaderHPMultiplier *= INVADER_HP_MULTIPLIER_GROWTH_RATE;
     }
 
+    let invaderMaxGold = this.invaderIncome * INVADER_MAX_GOLD_RATIO;
+    if (this.invaderGold > invaderMaxGold) {
+      this.invaderGold = invaderMaxGold
+    }
+
     let invaderAction  = this.invaderAI(this);
     let defenderAction = this.defenderAI(this);
 
