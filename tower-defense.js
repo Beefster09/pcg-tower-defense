@@ -17,34 +17,39 @@ const colors = {
   towercooldown: '#00bcd4',
   rangeoverlay:  'rgba(255, 59, 00, 0.5)',
   rangeoutline:  '#ff0000',
+
   lowlife:       '#c1180c',
 
   text:          '#000000',
 }
 
+const INITIAL_GOLD             = 500;
+const INITIAL_LIFE             = 100;
+const INITIAL_INCOME           = 10;
+const INITIAL_MAXBOOST         = 0;
 const INCOME_INTERVAL          = 10;
 const INCOME_INCREASE_INTERVAL = 100;
-const HP_MULT_INTERVAL         = 25000;
-const HOARD_PENALTY_INTERVAL   = 10;
 
-const BASE_HP                            = 10;
-const BASE_COST                          = 10;
-const DEF_COST                           = 10;
-const RES_COST                           = 10;
-const INVADER_INITIAL_GOLD               = 0;
-const INVADER_INITIAL_INCOME             = 10;
-const INVADER_INITIAL_MAXBOOST           = 0;
-const INVADER_MAXBOOST_UPGRADE_INCREMENT = 3;
-const INVADER_HP_MULTIPLIER_GROWTH_RATE  = 1.1;
+const MAX_GAME_LEN = 100000;
+const LOW_LIFE_THRESHOLD = 15;
 
-const BUILD_COST            = 10;
-const BUILD_TIME            = 10;
-const UPGRADE_COST          = 10;
-const UPGRADE_TIME          = 10;
-const BOMB_COOLDOWN         = 5;
-const DEFENDER_INITIAL_GOLD = 50;
-const DEFENDER_INITIAL_LIFE = 100;
-const VALID_TOWER_TYPES     = ['turret', 'bomb', 'stunner'];
+const BASE_HP   = 10;
+const BASE_COST = 10;
+const DEF_COST  = 10;
+const RES_COST  = 10;
+const KILL_GOLD_RATIO = 0.1;
+const INVADE_GOLD_RATIO = 1.5;
+
+const BUILD_COST        = 100;
+const BUILD_TIME        = 10;
+const UPGRADE_COST      = 100;
+const UPGRADE_TIME      = 10;
+const BOMB_COOLDOWN     = 5;
+const VALID_TOWER_TYPES = ['turret', 'bomb', 'stunner'];
+
+
+const LEFT  = 0;
+const RIGHT = 1;
 
 class Invader {
   constructor(hp, defense, stunRes) {
@@ -63,6 +68,14 @@ class Invader {
 
   stun(power) {
     this.stunTime = Math.max(power - this.stunRes, 0);
+  }
+
+  killReward() {
+    return (this.maxhp + DEF_COST * this.defense + RES_COST * this.stunRes) * KILL_GOLD_RATIO | 0;
+  }
+
+  invadeReward() {
+    return this.hp * INVADE_GOLD_RATIO | 0;
   }
 }
 
@@ -96,41 +109,137 @@ class Tower {
   }
 }
 
+class Board {
+  constructor(side) {
+    this.side = side;
+    this.invaders = new Array(100);
+    this.towers   = new Array(100);
+  }
+
+  step() {
+    let goldEarned = 0;
+    let invaded = 0;
+    // Attack invaders
+    for (let tower of this.towers) {
+      if (!tower) continue;
+      if (tower.cooldown) {
+        tower.cooldown--;
+        continue;
+      }
+      switch (tower.type) {
+        case 'turret':
+          for (let i = tower.pos + tower.range; i >= tower.pos - tower.range; i--) {
+            let invader = this.invaders[i];
+            if (invader) {
+              if (invader.damage(tower.power)) {
+                this.invaders[i] = null;
+                goldEarned += invader.killReward();
+              }
+              break;
+            }
+          }
+          break;
+        case 'stunner':
+          for (let i = tower.pos + tower.range; i >= tower.pos - tower.range; i--) {
+            if (this.invaders[i] && this.invaders[i].stunTime === 0) {
+              this.invaders[i].stun(tower.power);
+              tower.cooldown = tower.power + 1;
+              break;
+            }
+          }
+          break;
+        case 'bomb':
+          if (this.invaders[tower.pos]) { // Only explodes if there is an invader immediately in front of it
+            for (let i = tower.pos - tower.range; i <= tower.pos + tower.range; i++) {
+              if (this.invaders[i]) {
+                if (this.invaders[i].damage(tower.power)) {
+                  this.invaders[i] = null;
+                  goldEarned += invader.killReward();
+                }
+                tower.cooldown = BOMB_COOLDOWN;
+              }
+            }
+          }
+          break;
+      }
+    }
+    // Move invaders
+    for (let i = 99; i >= 0; i--) {
+      let invader = this.invaders[i];
+      if (invader) {
+        if (invader.stunTime > 0) {
+          invader.stunTime--;
+          continue;
+        }
+        if (!this.invaders[i + 1]) {
+          this.invaders[i] = null;
+          if (i === 99) {
+            invaded = invader.invadeReward();
+          }
+          else {
+            this.invaders[++invader.pos] = invader;
+          }
+        }
+      }
+    }
+
+    return {
+      goldEarned: goldEarned,
+      invaded:    invaded
+    }
+  }
+}
+
+function player(name) {
+  return {
+    gold:     INITIAL_GOLD,
+    income:   INITIAL_INCOME,
+    boostMax: INITIAL_MAXBOOST,
+    life:     INITIAL_LIFE,
+  }
+}
+
 class Game {
-  constructor(invaderAI, defenderAI) {
-    this.invaderSlots     = new Array(100);
-    this.towerSlots       = new Array(100);
-    this.turnNumber       = 0;
+  constructor(leftName, leftBot, rightName, rightBot) {
+    this.turnNumber = 0;
+    this.gameOver = false;
 
-    this.invaderAI        = invaderAI || (game => null);
-    this.invaderGold      = INVADER_INITIAL_GOLD;
-    this.invaderIncome    = INVADER_INITIAL_INCOME;
-    this.invaderBoostMax  = INVADER_INITIAL_MAXBOOST;
-    this.invaderHPMultiplier = 1.0;
-    this.turnsSinceLastSpawn = 0;
-
-    this.defenderAI       = defenderAI || (game => null);
-    this.defenderGold     = DEFENDER_INITIAL_GOLD;
-    this.defenderLife     = DEFENDER_INITIAL_LIFE;
+    this.boards  = [new Board(LEFT), new Board(RIGHT)];
+    this.players = [player(), player()];
+    this.bots    = [leftBot, rightBot];
 
     this.canvas = document.getElementById('viewport');
     this.canvasContext = this.canvas.getContext('2d');
 
-    this.hudElements = {
-      turnNumber:    document.getElementById('turn-number'),
-      invaderGold:   document.getElementById('invader-gold'),
-      invaderIncome: document.getElementById('invader-income'),
-      invaderBoost:  document.getElementById('invader-boost'),
-      invaderHPMult: document.getElementById('invader-mult'),
-      defenderGold:  document.getElementById('defender-gold'),
-      defenderLife:  document.getElementById('defender-life'),
-      hoverStats:    document.getElementById('hover-stats'),
+    this.hud = {
+      turnNumber: document.getElementById('turn-number'),
+      hoverStats: document.getElementById('hover-stats'),
+      players: [
+        {
+          name:   document.getElementById('left-name'),
+          gold:   document.getElementById('left-gold'),
+          income: document.getElementById('left-income'),
+          boost:  document.getElementById('left-boost'),
+          life:   document.getElementById('left-life'),
+        },
+        {
+          name:   document.getElementById('right-name'),
+          gold:   document.getElementById('right-gold'),
+          income: document.getElementById('right-income'),
+          boost:  document.getElementById('right-boost'),
+          life:   document.getElementById('right-life'),
+        }
+      ]
     }
-    this.hudElements.hoverPlaceholder = this.hudElements.hoverStats.innerHTML;
+    this.hoverPlaceholder = this.hud.hoverStats.innerHTML;
+    this.hud.players[LEFT].name.innerText  = leftName;
+    this.hud.players[RIGHT].name.innerText = rightName;
 
     this.selectedEntity = null;
     this.selectedIndex = null;
     this.selectedType = null;
+
+    this.frameQueued = null;
 
     let self = this;
     this.canvas.addEventListener("mousemove", function(event) {
@@ -158,186 +267,149 @@ class Game {
       }
 
       self.updateHUD();
-      window.requestAnimationFrame(() => self.draw());
+      self.queueDraw();
     });
   }
 
-  spawnInvader({hp, defense, stunRes, ..._}) {
+  spawnInvader(who, {hp, defense, stunRes, ..._}) {
+    let board  = this.boards[who];
+    let player = this.players[who];
     hp = Math.max(hp || 0, 0);
     defense = Math.max(defense || 0, 0);
     stunRes = Math.max(stunRes || 0, 0);
     let cost = BASE_COST + hp + defense * DEF_COST + stunRes * RES_COST;
     let totalBoost = hp + defense + stunRes;
     if (
-      !this.invaderSlots[0]
-      && this.invaderGold >= cost
-      && totalBoost <= this.invaderBoostMax
+      !board.invaders[0]
+      && player.gold >= cost
+      && totalBoost <= player.boostMax
     ) {
-      let spawnHP = (BASE_HP + hp) * this.invaderHPMultiplier | 0;
+      let spawnHP = (BASE_HP + hp);
       let invader = new Invader(spawnHP, defense, stunRes);
-      this.invaderSlots[0] = invader;
-      this.invaderGold -= cost;
+      board.invaders[0] = invader;
+      player.gold -= cost;
       return invader;
     }
   }
 
-  buildTower({type, pos, ..._}) {
+  buildTower(who, {type, pos, ..._}) {
+    let board  = this.boards[1 - who];
+    let player = this.players[who];
     if (
-      pos != null && pos >= 0 && pos < 100 && !this.towerSlots[pos]
+      pos != null && pos >= 0 && pos < 100 && !board.towers[pos]
       && type && VALID_TOWER_TYPES.includes(type)
-      && this.defenderGold >= BUILD_COST
+      && player.gold >= BUILD_COST
     ) {
       let tower = new Tower(type, pos);
-      this.towerSlots[pos] = tower;
-      this.defenderGold -= BUILD_COST;
+      board.towers[pos] = tower;
+      player.gold -= BUILD_COST;
       return tower;
     }
   }
 
-  upgradeTower({pos, stat, ..._}) {
+  upgradeTower(who, {pos, stat, ..._}) {
+    let board  = this.boards[1 - who];
+    let player = this.players[who];
     if (
-      this.towerSlots[pos]
+      board.towers[pos]
       && (stat === 'power' || stat === 'range')
-      && this.defenderGold >= UPGRADE_COST
+      && player.gold >= UPGRADE_COST
     ) {
-      this.towerSlots[pos].upgrade(stat);
-      this.defenderGold -= UPGRADE_COST;
+      board.towers[pos].upgrade(stat);
+      player.gold -= UPGRADE_COST;
     }
   }
 
-  destroyTower({pos, ..._}) {
-    if (this.towerSlots[pos]) {
-      let tower = this.towerSlots[pos];
-      this.towerSlots[pos] = null;
-      this.defenderGold += (BUILD_COST + UPGRADE_COST * tower.level) / 2 | 0;
+  destroyTower(who, {pos, ..._}) {
+    let board  = this.boards[1 - who];
+    let player = this.players[who];
+    if (board.towers[pos]) {
+      let tower = board.towers[pos];
+      board.towers[pos] = null;
+      player.gold += (BUILD_COST + UPGRADE_COST * tower.level) / 2 | 0;
     }
   }
 
-  takeTurn() {
-    // Attack invaders
-    for (let j = 99; j >= 0; j--) {
-      let tower = this.towerSlots[j];
-      if (!tower) continue;
-      if (tower.cooldown) {
-        tower.cooldown--;
-        continue;
-      }
-      switch (tower.type) {
-        case 'turret':
-          for (let i = tower.pos + tower.range; i >= tower.pos - tower.range; i--) {
-            if (this.invaderSlots[i]) {
-              if (this.invaderSlots[i].damage(tower.power)) {
-                this.invaderSlots[i] = null;
-              }
-              break;
-            }
-          }
-          break;
-        case 'stunner':
-          for (let i = tower.pos + tower.range; i >= tower.pos - tower.range; i--) {
-            if (this.invaderSlots[i] && this.invaderSlots[i].stunTime === 0) {
-              this.invaderSlots[i].stun(tower.power);
-              tower.cooldown = tower.power + 1;
-              break;
-            }
-          }
-          break;
-        case 'bomb':
-          if (this.invaderSlots[tower.pos]) { // Only explodes if there is an invader immediately in front of it
-            for (let i = tower.pos - tower.range; i <= tower.pos + tower.range; i++) {
-              if (this.invaderSlots[i]) {
-                if (this.invaderSlots[i].damage(tower.power)) {
-                  this.invaderSlots[i] = null;
-                }
-                tower.cooldown = BOMB_COOLDOWN;
-              }
-            }
-          }
-          break;
-      }
-    }
-    // Move invaders
-    for (let i = 99; i >= 0; i--) {
-      let invader = this.invaderSlots[i];
-      if (invader) {
-        if (invader.stunTime > 0) {
-          invader.stunTime--;
-          continue;
-        }
-        if (!this.invaderSlots[i + 1]) {
-          this.invaderSlots[i] = null;
-          if (i === 99) {
-            this.defenderLife--;
-          }
-          else {
-            this.invaderSlots[++invader.pos] = invader;
-          }
-        }
-      }
-    }
+  step() {
+    if (this.gameOver) return;
 
-    this.turnsSinceLastSpawn++;
-    if (this.turnsSinceLastSpawn % HOARD_PENALTY_INTERVAL == 0) {
-      let basePenalty = this.turnsSinceLastSpawn / HOARD_PENALTY_INTERVAL - 1 | 0;
-      if (basePenalty > 0) {
-        let penaltyMultiplier = Math.max(Math.sqrt(this.invaderIncome - BASE_COST), 1);
-        console.log(`Invader is hoarding gold. Penalizing: ${basePenalty} * ${penaltyMultiplier}`);
-        this.invaderGold -= basePenalty * penaltyMultiplier | 0;
-        if (this.invaderGold < 0) {
-          this.invaderGold = 0;
-        }
+    for (let board of this.boards) {
+      let result = board.step();
+      this.players[1 - board.side].gold += result.goldEarned;
+      this.players[board.side].gold += result.invaded;
+      if (result.invaded) {
+        this.players[1 - board.side].life -= 1;
       }
     }
 
     this.turnNumber++;
     if (this.turnNumber % INCOME_INTERVAL == 0) {
-      this.invaderGold += this.invaderIncome;
-      this.defenderGold += 1;
+      for (let player of this.players) {
+        player.gold += player.income;
+      }
     }
     if (this.turnNumber % INCOME_INCREASE_INTERVAL == 0) {
-      this.invaderIncome += Math.log10(this.turnNumber) - 1 | 0;
-      this.invaderBoostMax += Math.log10(this.turnNumber) | 0;
-    }
-    if (this.turnNumber % HP_MULT_INTERVAL == 0) {
-      this.invaderHPMultiplier *= INVADER_HP_MULTIPLIER_GROWTH_RATE;
-    }
-
-    let invaderMaxGold = this.invaderIncome * INVADER_MAX_GOLD_RATIO;
-    if (this.invaderGold > invaderMaxGold) {
-      this.invaderGold = invaderMaxGold
-    }
-
-    let invaderAction  = this.invaderAI(this);
-    let defenderAction = this.defenderAI(this);
-
-    if (invaderAction) {
-      if (this.spawnInvader(invaderAction)) {
-        this.turnsSinceLastSpawn = 0;
+      for (let player of this.players) {
+        player.income   += Math.log10(this.turnNumber) - 1 | 0;
+        player.boostMax += Math.log10(this.turnNumber)     | 0;
       }
     }
 
-    if (defenderAction) {
-      switch (defenderAction.action) {
-        case 'build':
-          this.buildTower(defenderAction);
-          break;
-        case 'upgrade':
-          this.upgradeTower(defenderAction);
-          break;
-        case 'destroy':
-          this.destroyTower(defenderAction);
-          break;
-        default:
-          break;
+    for (let me = 0; me < 2; me++) {
+      let notme = 1 - me;
+      let action = this.bots[me](
+        this.turnNumber,
+        this.players[me],
+        this.players[notme],
+        this.boards[me],     // Attacking
+        this.boards[notme],  // Defending
+      );
+      if (action) {
+        switch (action.action) {
+          case 'spawn':
+            this.spawnInvader(me, action);
+            break;
+          case 'build':
+            this.buildTower(me, action);
+            break;
+          case 'upgrade':
+            this.upgradeTower(me, action);
+            break;
+          case 'destroy':
+            this.destroyTower(me, action);
+            break;
+          default:
+            break;
+        }
       }
     }
 
     this.updateHUD();
 
-    return this.defenderLife > 0;
+    if (
+      this.turnNumber >= MAX_GAME_LEN
+      || this.players[0].life <= 0
+      || this.players[1].life <= 0
+    ) {
+      this.gameOver = true;
+    }
+    return !this.gameOver;
+  }
+
+  queueDraw() {
+    let self = this;
+    window.requestAnimationFrame(() => self.draw());
   }
 
   draw() {
+    this.canvasContext.fillStyle = colors.background;
+    this.canvasContext.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+    this.drawSide(this.canvas.height * 0.25 | 0, this.boards[0], false);
+    this.drawSide(this.canvas.height * 0.75 | 0, this.boards[1], true);
+  }
+
+  drawSide(boardCenter, board, mirror) {
     let ctx = this.canvasContext;
 
     let yCenter = this.canvas.height / 2;
@@ -352,14 +424,11 @@ class Game {
     let barPadding = 2;
     let pieceXCenterBase = leftEdge + halfSpace;
 
-    ctx.fillStyle = colors.background;
-    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
     ctx.fillStyle = colors.boardbg1;
     for (let i = 0; i < 10; i += 2) {
       ctx.fillRect(
         leftEdge + 10 * spaceSize * i,
-        yCenter - spaceSize,
+        boardCenter - spaceSize,
         10 * spaceSize,
         spaceSize
       );
@@ -368,7 +437,7 @@ class Game {
     for (let i = 1; i < 10; i += 2) {
       ctx.fillRect(
         leftEdge + 10 * spaceSize * i,
-        yCenter - spaceSize,
+        boardCenter - spaceSize,
         10 * spaceSize,
         spaceSize
       );
@@ -377,20 +446,21 @@ class Game {
     for (let i = 0; i < 100; i ++) {
       ctx.strokeRect(
         leftEdge + spaceSize * i,
-        yCenter - spaceSize,
+        boardCenter - spaceSize,
         spaceSize,
         spaceSize
       )
     }
 
     for (let i = 0; i < 100; i ++) {
-      let invader = this.invaderSlots[i];
+      let gridPos = mirror? 99 - i : i;
+      let invader = board.invaders[i];
       if (invader) {
         ctx.fillStyle = colors.invader;
         ctx.beginPath();
         ctx.arc(
-          pieceXCenterBase + spaceSize * i,
-          yCenter - halfSpace,
+          pieceXCenterBase + spaceSize * gridPos,
+          boardCenter - halfSpace,
           pieceRadius,
           0, 2*Math.PI
         );
@@ -398,37 +468,35 @@ class Game {
         ctx.fill();
         ctx.fillStyle = colors.invaderdmg;
         ctx.fillRect(
-          pieceXCenterBase - barWidth + spaceSize * i,
-          yCenter - spaceSize - barPadding - hpBarHeight,
+          pieceXCenterBase - barWidth + spaceSize * gridPos,
+          boardCenter - spaceSize - barPadding - hpBarHeight,
           barWidth,
           hpBarHeight
         );
         ctx.fillStyle = colors.invaderhp;
         let pixhp = hpBarHeight * (invader.hp / invader.maxhp);
         ctx.fillRect(
-          pieceXCenterBase - barWidth + spaceSize * i,
-          yCenter - spaceSize - barPadding - pixhp,
+          pieceXCenterBase - barWidth + spaceSize * gridPos,
+          boardCenter - spaceSize - barPadding - pixhp,
           barWidth,
           pixhp
         );
         ctx.fillStyle = colors.invaderstun;
         ctx.fillRect(
-          pieceXCenterBase + spaceSize * i,
-          yCenter - spaceSize - barPadding - invader.stunTime * heightPerStun,
+          pieceXCenterBase + spaceSize * gridPos,
+          boardCenter - spaceSize - barPadding - invader.stunTime * heightPerStun,
           barWidth,
           invader.stunTime * heightPerStun
         );
       }
-    }
 
-    for (let i = 0; i < 100; i ++) {
-      let tower = this.towerSlots[i];
+      let tower = board.towers[i];
       if (tower) {
-        ctx.fillStyle = colors[this.towerSlots[i].type]
+        ctx.fillStyle = colors[tower.type]
         ctx.beginPath();
         ctx.arc(
-          pieceXCenterBase + spaceSize * i,
-          yCenter + halfSpace,
+          pieceXCenterBase + spaceSize * gridPos,
+          boardCenter + halfSpace,
           pieceRadius,
           0, 2*Math.PI
         );
@@ -436,8 +504,8 @@ class Game {
         ctx.fill();
         ctx.fillStyle = colors.towercooldown;
         ctx.fillRect(
-          pieceXCenterBase - barWidth / 2 + spaceSize * i,
-          yCenter + spaceSize + barPadding,
+          pieceXCenterBase - barWidth / 2 + spaceSize * gridPos,
+          boardCenter + spaceSize + barPadding,
           barWidth,
           tower.cooldown * heightPerCooldown
         );
@@ -452,13 +520,13 @@ class Game {
       ctx.strokeStyle = colors.rangeoutline;
       ctx.fillRect(
         leftEdge + rangeLeftX * spaceSize,
-        yCenter - spaceSize,
+        boardCenter - spaceSize,
         (rangeRightX - rangeLeftX) * spaceSize,
         spaceSize,
       )
       ctx.strokeRect(
         leftEdge + rangeLeftX * spaceSize,
-        yCenter - spaceSize,
+        boardCenter - spaceSize,
         (rangeRightX - rangeLeftX) * spaceSize,
         spaceSize,
       )
@@ -466,36 +534,38 @@ class Game {
   }
 
   updateHUD() {
-    switch (this.selectedType) {
-      case 'invader':
-        this.selectedEntity = this.invaderSlots[this.selectedIndex];
-        break;
-      case 'tower':
-        this.selectedEntity = this.towerSlots[this.selectedIndex];
-        break;
-      default:
-        this.selectedEntity = null;
-        break;
-    }
-
+    // switch (this.selectedType) {
+    //   case 'invader':
+    //     this.selectedEntity = this.invaders[this.selectedIndex];
+    //     break;
+    //   case 'tower':
+    //     this.selectedEntity = this.towerSlots[this.selectedIndex];
+    //     break;
+    //   default:
+    //     this.selectedEntity = null;
+    //     break;
+    // }
+    //
     if (this.selectedEntity) {
       // TODO: make a table or something prettier and more intelligent
-      this.hudElements.hoverStats.innerText = JSON.stringify(this.selectedEntity);
+      this.hud.hoverStats.innerText = JSON.stringify(this.selectedEntity);
     }
     else {
       // TODO: make this not use innerHTML and cache DOM nodes or something...
-      this.hudElements.hoverStats.innerHTML = this.hudElements.hoverPlaceholder;
+      this.hud.hoverStats.innerHTML = this.hoverPlaceholder;
     }
 
-    this.hudElements.turnNumber.innerText    = this.turnNumber;
-    this.hudElements.invaderGold.innerText   = this.invaderGold;
-    this.hudElements.invaderIncome.innerText = this.invaderIncome;
-    this.hudElements.invaderBoost.innerText  = this.invaderBoostMax;
-    this.hudElements.invaderHPMult.innerText = this.invaderHPMultiplier;
-    this.hudElements.defenderGold.innerText  = this.defenderGold;
-    this.hudElements.defenderLife.innerText  = this.defenderLife;
-    if (this.defenderLife <= 3) {
-      this.hudElements.defenderLife.style.color = colors.lowlife;
+    this.hud.turnNumber.innerText    = this.turnNumber;
+    for (let i = 0; i < 2; i++) {
+      let hud = this.hud.players[i];
+      let player = this.players[i];
+      hud.gold.innerText = player.gold;
+      hud.income.innerText = player.income;
+      hud.boost.innerText = player.boostMax;
+      hud.life.innerText = player.life;
+      if (player.life <= LOW_LIFE_THRESHOLD) {
+        hud.life.style.color = colors.lowlife;
+      }
     }
   }
 
@@ -516,8 +586,10 @@ class Game {
       if (runState.running) {
         runState.turnTimeout = window.setTimeout(turn, parseInt(delay.value));
       }
-      runState.running = game.takeTurn();
-      window.requestAnimationFrame(() => game.draw());
+      if (!game.step()) {
+        pauseAction();
+      }
+      game.queueDraw();
     }
 
     function resumeAction() {
@@ -538,23 +610,23 @@ class Game {
 
     function stepAction() {
       pauseAction();
-      game.takeTurn();
-      window.requestAnimationFrame(() => game.draw());
+      game.step();
+      game.queueDraw();
     }
 
     pauseAction();
     step.onclick = stepAction;
 
-    window.requestAnimationFrame(() => game.draw());
+    this.queueDraw();
   }
 }
 
 function simpleTurretBuilder() {
   let pos = 10;
   let built = 0;
-  return function decideAction(game) {
+  return function decideAction(turnNumber, me, notme, attacking, defending) {
     if (built < 100) {
-      if (game.defenderGold >= BUILD_COST) {
+      if (me.gold >= BUILD_COST) {
         let action = {action: 'build', pos: pos, type: 'turret'};
         pos = (pos + 1) % 100;
         built ++;
@@ -565,7 +637,7 @@ function simpleTurretBuilder() {
       }
     }
     else {
-      if (game.defenderGold >= UPGRADE_COST) {
+      if (me.gold >= UPGRADE_COST) {
         let action = {action: 'upgrade', pos: pos, stat: 'power'};
         pos = (pos + 1) % 100;
         return action;
@@ -575,15 +647,20 @@ function simpleTurretBuilder() {
 }
 
 function simpleInvaderArmy() {
-  return function decideAction(game) {
-    if (game.invaderGold >= BASE_COST + game.invaderBoostMax) {
-      return {action: 'spawn', hp: game.invaderBoostMax};
+  return function decideAction(turnNumber, me, notme, attacking, defending) {
+    // console.log(turnNumber, me, notme, attacking, defending)
+    // console.log(me.gold, BASE_COST, me.boostMax, me.gold >= BASE_COST + me.boostMax)
+    if (me.gold >= BASE_COST + me.boostMax) {
+      return {action: 'spawn', hp: me.boostMax};
     }
   }
 }
 
 function newGame() {
-  let game = new Game(simpleInvaderArmy(), simpleTurretBuilder());
+  let game = new Game(
+    "Placeholder (left)", simpleInvaderArmy(),
+    "Placeholder (right)", simpleInvaderArmy()
+  );
   game.run()
 }
 

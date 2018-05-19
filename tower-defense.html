@@ -13,34 +13,34 @@
       <div id="turn-number" class="number stat-column" >0</div>
       <div class="spacer"></div>
       <div class="header">Turn Delay</div>
-      <div><input id="turn-delay" class="number" type="number" value="100" min="0" max="1000" step="10" /> ms</div>
+      <div><input id="turn-delay" class="number" type="number" value="100" min="0" max="1000" step="5" /> ms</div>
       <div class="spacer"></div>
       <input id="pause-btn" class="playback" type="button" value="Pause"/>
       <input id="step-btn" class="playback" type="button" value="Step"/>
     </div>
     <div>
-      <canvas id="viewport" height=240 width=1280 />
+      <canvas id="viewport" height=300 width=1280 />
     </div>
     <div id="hud" class="hud">
       <table id="invader-stats" class="competitor-stats">
         <tr>
-          <th id="invader-name" class="ai-name" colspan="2">Invader</th>
+          <th id="left-name" class="ai-name" colspan="2">Invader</th>
         </tr>
         <tr>
           <th>Gold</th>
-          <td id="invader-gold" class="number stat-column">0</td>
+          <td id="left-gold" class="number stat-column">500</td>
         </tr>
         <tr>
           <th>Income</th>
-          <td id="invader-income" class="number">10</td>
+          <td id="left-income" class="number">10</td>
         </tr>
         <tr>
           <th>Max Stat Boost</th>
-          <td id="invader-boost" class="number">0</td>
+          <td id="left-boost" class="number">0</td>
         </tr>
         <tr>
-          <th>HP Multiplier</th>
-          <td id="invader-mult" class="number">1.0</td>
+          <th>Life</th>
+          <td id="left-life" class="number">100</td>
         </tr>
       </table>
       <div id="hover-stats" class="spacer">
@@ -48,15 +48,23 @@
       </div>
       <table id="defender-stats" class="competitor-stats">
         <tr>
-          <th id="defender-name" class="ai-name" colspan="2">Defender</th>
+          <th id="right-name" class="ai-name" colspan="2">Defender</th>
         </tr>
         <tr>
           <th>Gold</th>
-          <td id="defender-gold" class="number stat-column">50</td>
+          <td id="right-gold" class="number stat-column">500</td>
+        </tr>
+        <tr>
+          <th>Income</th>
+          <td id="right-income" class="number">10</td>
+        </tr>
+        <tr>
+          <th>Max Stat Boost</th>
+          <td id="right-boost" class="number">0</td>
         </tr>
         <tr>
           <th>Life</th>
-          <td id="defender-life" class="number">100</td>
+          <td id="right-life" class="number">100</td>
         </tr>
       </table>
     </div>
