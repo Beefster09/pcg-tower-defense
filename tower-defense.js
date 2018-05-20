@@ -1,20 +1,20 @@
 'use strict';
 
 const colors = {
-  background:    '#d8d89a',
-  boardbg1:      '#8bc34a',
-  boardbg2:      '#d6af5c',
-  boardlines:    '#795548',
+  background:    '#cfd8dc',
+  boardbg1:      '#7e919c',
+  boardbg2:      '#546e7a',
+  boardlines:    '#263238',
 
-  invader:       '#ff1744',
-  invaderhp:     '#00ff00',
-  invaderdmg:    '#ff0000',
-  invaderstun:   '#00bcd4',
+  invader:       '#ffd740',
+  invaderhp:     'rgb(244, 67, 54)',
+  invaderdmg:    'rgba(244, 67, 54, 0.2)',
+  invaderstun:   '#0097a7',
 
-  turret:        '#673ab7',
-  stunner:       '#82b1ff',
+  turret:        '#f44336',
+  stunner:       '#1976d2',
   bomb:          '#263238',
-  towercooldown: '#00bcd4',
+  towercooldown: '#0097a7',
   rangeoverlay:  'rgba(255, 240, 00, 0.5)',
   rangeoutline:  '#ff9800',
 
@@ -29,20 +29,23 @@ const INITIAL_INCOME           = 10;
 const INITIAL_MAXBOOST         = 0;
 const INCOME_INTERVAL          = 10;
 const INCOME_INCREASE_INTERVAL = 100;
-const BUILD_COST_INFLATION     = 10;
-const UPGRADE_COST_INFLATION   = 15;
+const BUILD_COST_INFLATION         = 10;
+const BUILD_COST_INFLATION_RATIO   = 1.0;
+const UPGRADE_COST_INFLATION       = 5;
+const UPGRADE_COST_INFLATION_RATIO = 1.5;
 
 const MAX_GAME_LEN = 100000;
 const LOW_LIFE_THRESHOLD = 15;
 
 const BASE_HP   = 10;
+const HP_COST   = 1;
 const DEF_COST  = 10;
 const RES_COST  = 10;
 const BASE_INVADER_COST = 10;
 const KILL_GOLD_RATIO = 0.1;
 
-const BASE_BUILD_COST   = 80;
-const BASE_UPGRADE_COST = 100;
+const BASE_BUILD_COST   = 50;
+const BASE_UPGRADE_COST = 75;
 const BUILD_TIME        = 10;
 const UPGRADE_TIME      = 10;
 const BOMB_COOLDOWN     = 5;
@@ -137,6 +140,7 @@ class Stunner extends Tower {
   constructor(pos) {
     super(pos);
     this.range = 0;
+    this.power = 3;
     this.type = 'stunner';
   }
 
@@ -159,6 +163,7 @@ class Bomb extends Tower {
   constructor(pos) {
     super(pos);
     this.range = 2;
+    this.power = 2;
     this.type = 'bomb';
   }
 
@@ -169,13 +174,13 @@ class Bomb extends Tower {
         for (let i = this.pos - this.range; i <= this.pos + this.range; i++) {
           let invader = invaders[i];
           if (invader) {
-            if (invader.damage(tower.power)) {
+            if (invader.damage(this.power)) {
               invaders[i] = null;
               reward += invader.killReward();
             }
           }
         }
-        tower.cooldown = BOMB_COOLDOWN;
+        this.cooldown = BOMB_COOLDOWN;
       }
     }
     return reward;
@@ -241,11 +246,11 @@ class Player {
   }
 
   get buildCost() {
-    return BASE_BUILD_COST + this.inflation * BUILD_COST_INFLATION * Math.log10(Math.max(this.inflation - 10, 1)) | 0;
+    return BASE_BUILD_COST + this.inflation * BUILD_COST_INFLATION_RATIO | 0;
   }
 
   get upgradeCost() {
-    return BASE_UPGRADE_COST + this.inflation * UPGRADE_COST_INFLATION * Math.log10(Math.max(this.inflation - 10, 1)) | 0;
+    return BASE_UPGRADE_COST + this.inflation * UPGRADE_COST_INFLATION_RATIO | 0;
   }
 }
 
@@ -341,7 +346,7 @@ class Game {
       let tower = new TOWER_TYPES[type](pos);
       board.towers[pos] = tower;
       player.gold -= player.buildCost;
-      player.inflation += 1;
+      player.inflation += BUILD_COST_INFLATION;
       return tower;
     }
   }
@@ -356,7 +361,7 @@ class Game {
     ) {
       board.towers[pos].upgrade(stat);
       player.gold -= player.upgradeCost;
-      player.inflation += 1;
+      player.inflation += UPGRADE_COST_INFLATION;
     }
   }
 
@@ -367,7 +372,7 @@ class Game {
       let tower = board.towers[pos];
       board.towers[pos] = null;
       player.gold += (BUILD_COST + UPGRADE_COST * (tower.level - 1)) / 2 | 0;
-      player.inflation -= tower.level - 1;
+      player.inflation -= BUILD_COST_INFLATION + UPGRADE_COST_INFLATION * (tower.level - 1);
     }
   }
 
@@ -382,6 +387,7 @@ class Game {
       attacker.gold += result.invaded * attacker.income | 0;
       if (result.invaded) {
         defender.life -= 1;
+        attacker.income += 1;
       }
     }
 
@@ -393,8 +399,8 @@ class Game {
     }
     if (this.turnNumber % INCOME_INCREASE_INTERVAL == 0) {
       for (let player of this.players) {
-        player.income   += Math.log10(this.turnNumber) - 1 | 0;
-        player.boostMax += Math.log10(this.turnNumber)     | 0;
+        player.income   += 3;
+        player.boostMax += 5;
       }
     }
 
@@ -697,7 +703,14 @@ function simpleTurretBuilder() {
   return function decideAction(turnNumber, me, notme, attacking, defending) {
     if (built < 100) {
       if (me.gold >= me.buildCost) {
-        let action = {action: 'build', pos: pos, type: 'turret'};
+        let type = 'turret';
+        if (pos == 32) {
+          type = 'bomb'
+        }
+        if (pos % 3 == 1 && pos != 31) {
+          type = 'stunner'
+        }
+        let action = {action: 'build', pos: pos, type: type};
         pos = (pos + 1) % 100;
         built ++;
         if (built == 100) {
